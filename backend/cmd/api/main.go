@@ -1,31 +1,34 @@
 package main
 
 import (
-	"PedroFaria14/clean-pos-engine/internal/domain/order"
-	"PedroFaria14/clean-pos-engine/internal/domain/payment"
-	"PedroFaria14/clean-pos-engine/internal/domain/product"
-	"PedroFaria14/clean-pos-engine/internal/domain/shared"
-	"fmt"
+	"PedroFaria14/clean-pos-engine/internal/application/usecase"
+	"PedroFaria14/clean-pos-engine/internal/infra/delivery/api"
+	"PedroFaria14/clean-pos-engine/internal/infra/repository"
+
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
-	price, _ := shared.NewMoney(10000) 
-	p1, _ := product.NewProduct("1", "Honda Civic Type R Model", price)
+	productRepo := repository.NewMemoryProductRepository()
+	orderRepo := repository.NewMemoryOrderRepository()
 
-	myOrder := order.NewOrder("order-123")
-	item, _ := order.NewCartItem(p1, 1)
-	myOrder.AddItem(*item)
+	checkoutUC := usecase.NewCheckoutUseCase(orderRepo, productRepo)
+	productUC := usecase.NewProductUseCase(productRepo)
+	getOrderUC := usecase.NewGetOrderUseCase(orderRepo) 
 
+	checkoutHandler := api.NewCheckoutHandler(checkoutUC)
+	productHandler := api.NewProductHandler(productUC)
+	orderHandler := api.NewOrderHandler(getOrderUC) 
 
-	discountAmount, _ := shared.NewMoney(1000)
-	discount, _ := payment.NewDiscount(discountAmount)
-	myOrder.ApplyDiscount(discount)
+	r := gin.Default()
 
-	pix := payment.NewPixStrategy(5) 
-	myOrder.SetPaymentStrategy(pix)
+	// Endpoints de Produtos
+	r.POST("/products", productHandler.Create)
+	r.GET("/products", productHandler.List)
 
-	myOrder.Checkout()
-	myOrder.Pay()
+	// Endpoints de Pedidos
+	r.POST("/checkout", checkoutHandler.Handle)
+	r.GET("/orders/:id", orderHandler.GetByID)
 
-	fmt.Printf("Order Total: %d cents\n", myOrder.CalculateTotal().Cents())
+	r.Run(":8080")
 }

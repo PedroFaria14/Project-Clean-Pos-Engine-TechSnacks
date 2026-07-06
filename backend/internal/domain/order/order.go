@@ -44,6 +44,9 @@ func (o *Order) ApplyDiscount(discount *payment.Discount) error {
 func (o *Order) SetPaymentStrategy(strategy payment.PaymentStrategy) {
 	o.paymentStrategy = strategy
 }
+func (o *Order) ID() string {
+	return o.id
+}
 
 func (o *Order) CalculateTotal() shared.Money {
 	subtotal := o.cart.Total()
