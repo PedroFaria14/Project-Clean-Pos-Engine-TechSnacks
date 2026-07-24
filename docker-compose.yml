@@ -3,27 +3,51 @@ version: "3.8"
 services:
   db:
     image: postgres:15-alpine
+    container_name: postgres_db
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: pos_engine
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: techsnacks
     ports:
       - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - pos_network
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: go_backend
     ports:
       - "8080:8080"
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: techsnacks
     depends_on:
       - db
-    volumes:
-      - ./backend:/app
+    networks:
+      - pos_network
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: react_frontend
     ports:
-      - "3000:3000"
-    volumes:
-      - ./frontend:/app
-    environment:
-      - CHOKIDAR_USEPOLLING=true
+      - "5173:5173"
+    depends_on:
+      - backend
+    networks:
+      - pos_network
+
+volumes:
+  pgdata:
+
+networks:
+  pos_network:
+    driver: bridge

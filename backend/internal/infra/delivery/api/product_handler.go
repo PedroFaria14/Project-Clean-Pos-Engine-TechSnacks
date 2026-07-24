@@ -38,3 +38,15 @@ func (h *ProductHandler) List(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, output)
 }
+
+func (h *ProductHandler) Delete(c *gin.Context) {
+	id := c.Param("id")
+
+	err := h.usecase.Delete(id)
+	if err != nil {
+		c.JSON(500, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.Status(204)
+}

@@ -53,7 +53,7 @@ func (uc *ProductUseCase) ListAll() ([]ProductOutputDTO, error) {
 		return nil, err
 	}
 
-	var output []ProductOutputDTO
+	output := []ProductOutputDTO{}
 	for _, p := range products {
 		output = append(output, ProductOutputDTO{
 			ID:    p.ID(),
@@ -62,4 +62,8 @@ func (uc *ProductUseCase) ListAll() ([]ProductOutputDTO, error) {
 		})
 	}
 	return output, nil
+}
+
+func (uc *ProductUseCase) Delete(id string) error {
+	return uc.repo.Delete(id)
 }
