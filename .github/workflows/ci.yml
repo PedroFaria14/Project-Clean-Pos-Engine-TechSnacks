@@ -1,0 +1,164 @@
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: test-only-password
+          POSTGRES_DB: techsnacks_test_ci
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d techsnacks_test_ci" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      TECHSNACKS_TEST_DATABASE_URL: postgres://postgres:test-only-password@127.0.0.1:5432/techsnacks_test_ci?sslmode=disable
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.10
+          cache-dependency-path: backend/go.sum
+      - name: Format, vet and real PostgreSQL tests (including race detector)
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          go vet -tags=integration ./...
+          go test -race -tags=integration -count=1 -timeout=5m ./...
+          go build ./cmd/...
+      - name: Reachable Go vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Disposable backup and restore drill
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" psql -U postgres -d techsnacks_test_ci -v ON_ERROR_STOP=1 -c "CREATE TABLE restore_probe (value text); INSERT INTO restore_probe VALUES ('restore-confirmed');"
+          docker exec "$POSTGRES_CONTAINER" pg_dump -U postgres -d techsnacks_test_ci --format=custom --no-owner --no-acl > "$RUNNER_TEMP/restore.dump"
+          docker exec "$POSTGRES_CONTAINER" createdb -U postgres techsnacks_test_restore_ci
+          docker exec -i "$POSTGRES_CONTAINER" pg_restore -U postgres --exit-on-error --no-owner --no-acl --dbname=techsnacks_test_restore_ci < "$RUNNER_TEMP/restore.dump"
+          test "$(docker exec "$POSTGRES_CONTAINER" psql -U postgres --dbname=techsnacks_test_restore_ci -tA -c 'SELECT value FROM restore_probe')" = restore-confirmed
+          docker exec "$POSTGRES_CONTAINER" dropdb -U postgres techsnacks_test_restore_ci
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+      - run: npm audit --audit-level=high
+      - run: npx --no-install playwright install --with-deps chromium
+      - run: npm run test:e2e:mock
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: browser-mock-report
+          path: frontend/playwright-report/mock
+          retention-days: 7
+  images-and-e2e:
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      E2E_DATABASE_URL: postgres://postgres:test-only-password@127.0.0.1:55432/techsnacks_test_images?sslmode=disable
+      E2E_SCHEMA: test_images
+      E2E_BASE_URL: http://127.0.0.1:8088
+      E2E_PASSWORD: ci-only-account-password-2026
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build runtime images and initialize only the disposable test database
+        run: |
+          docker compose -p techsnacks-ci -f compose.test.yml build --build-arg VCS_REF="$GITHUB_SHA" backend frontend
+          docker compose -p techsnacks-ci -f compose.test.yml up -d --wait db
+          docker compose -p techsnacks-ci -f compose.test.yml --profile tools run --rm migrate
+          for account in e2e.admin e2e.operator e2e.other; do
+            role=operator
+            if [ "$account" = e2e.admin ]; then role=admin; fi
+            docker compose -p techsnacks-ci -f compose.test.yml run --rm --no-deps -e TECHSNACKS_USER_PASSWORD="$E2E_PASSWORD" backend /usr/local/bin/create_user --username "$account" --role "$role"
+          done
+          docker compose -p techsnacks-ci -f compose.test.yml up -d --wait backend frontend
+      - name: Check runtime users and proxy readiness
+        run: |
+          test "$(docker compose -p techsnacks-ci -f compose.test.yml exec -T backend id -u)" != 0
+          test "$(docker compose -p techsnacks-ci -f compose.test.yml exec -T frontend id -u)" != 0
+          curl --fail --silent http://127.0.0.1:8088/api/health/ready
+      - name: Real browser journeys through runtime proxy and PostgreSQL
+        working-directory: frontend
+        run: |
+          npm ci
+          npx --no-install playwright install --with-deps chromium
+          npm run test:e2e:external
+      - name: Scan backend runtime image
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: techsnacks-backend:test
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - name: Scan frontend runtime image
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: techsnacks-frontend:test
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+      - run: mkdir -p .artifacts
+      - name: Backend SBOM
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: techsnacks-backend:test
+          format: cyclonedx
+          output: .artifacts/backend-sbom.cdx.json
+      - name: Frontend SBOM
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: techsnacks-frontend:test
+          format: cyclonedx
+          output: .artifacts/frontend-sbom.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-sboms
+          path: .artifacts/*-sbom.cdx.json
+          retention-days: 7
+      - name: Package only tested and scanned images, without pushing or deploying
+        run: |
+          docker tag techsnacks-backend:test "techsnacks-backend:$GITHUB_SHA"
+          docker tag techsnacks-frontend:test "techsnacks-frontend:$GITHUB_SHA"
+          docker save --output .artifacts/runtime-images.tar "techsnacks-backend:$GITHUB_SHA" "techsnacks-frontend:$GITHUB_SHA"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: runtime-images-${{ github.sha }}
+          path: .artifacts/runtime-images.tar
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: browser-real-report
+          path: frontend/playwright-report/real
+          retention-days: 7
+      - name: Remove only CI-owned containers and disposable volumes
+        if: always()
+        run: docker compose -p techsnacks-ci -f compose.test.yml down --volumes --remove-orphans

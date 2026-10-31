@@ -1,0 +1,29 @@
+# Explicit administrative operations, using credentials not mounted in runtime services.
+x-tool: &tool
+  image: ${BACKEND_IMAGE:?set a tested backend image}
+  environment:
+    APP_ENV: production
+    DB_HOST: ${DB_HOST:?set database host}
+    DB_PORT: ${DB_PORT:-5432}
+    DB_USER: ${MIGRATION_DB_USER:?set administrative database user}
+    DB_NAME: ${DB_NAME:?set database name}
+    DB_PASSWORD_FILE: /run/secrets/administrative_password
+    DB_SSLMODE: verify-full
+    DB_SSLROOTCERT: /run/secrets/db_ca
+    DB_STATEMENT_TIMEOUT: 5m
+  secrets: [administrative_password, db_ca]
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+services:
+  migrate:
+    <<: *tool
+    command: [/usr/local/bin/migrate]
+  create-user:
+    <<: *tool
+    command: [/usr/local/bin/create_user]
+secrets:
+  administrative_password:
+    file: ${MIGRATION_DB_PASSWORD_FILE:?set host administrative password-file path}
+  db_ca:
+    file: ${DB_SSLROOTCERT_FILE:?set host database CA-file path}

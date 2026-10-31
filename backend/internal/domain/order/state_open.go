@@ -5,8 +5,7 @@ import "errors"
 type OpenState struct{}
 
 func (s *OpenState) AddItem(order *Order, item CartItem) error {
-	order.Cart().AddItem(item)
-	return nil
+	return order.Cart().AddItem(item)
 }
 
 func (s *OpenState) Checkout(order *Order) error {

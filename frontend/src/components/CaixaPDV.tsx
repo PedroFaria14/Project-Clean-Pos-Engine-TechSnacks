@@ -1,266 +1,241 @@
-import { useEffect } from "react";
-import { useState } from "react";
-
-interface Product {
-  id: string;
-  name: string;
-  price: number;
-}
+import { useRef, useState } from "react";
+import {
+  clearPendingCheckout, clearLegacyPendingCheckout, createPendingCheckout, loadPendingCheckout, savePendingCheckout,
+  type PendingCheckout,
+} from "../checkout/pendingCheckout";
+import { apiRequest } from "../api/http";
+import { useSession } from "../auth/session_context";
+import type { Product } from "../products/product_api";
+import { cartTotal, formatPrice, searchText } from "../products/money";
+import { useProducts } from "../products/use_products";
+import { Alert } from "./ui/Alert";
+import { Button } from "./ui/Button";
+import { Dialog } from "./ui/Dialog";
+import { Field } from "./ui/Field";
+import { CatalogLoading, EmptyState } from "./ui/EmptyState";
 
 interface CartItem extends Product {
   quantity: number;
 }
 
+interface CheckoutResult {
+  order_id: string;
+  total_cents: number;
+  status: "AWAITING_PAYMENT";
+}
+
+function isCheckoutResult(value: unknown): value is CheckoutResult {
+  if (typeof value !== "object" || value === null) return false;
+
+  const result = value as Record<string, unknown>;
+  return (
+    typeof result.order_id === "string" &&
+    result.order_id.trim().length > 0 &&
+    typeof result.total_cents === "number" &&
+    Number.isSafeInteger(result.total_cents) &&
+    result.total_cents >= 0 &&
+    result.status === "AWAITING_PAYMENT"
+  );
+}
+
 export function CaixaPDV() {
-  const [products, setProducts] = useState<Product[]>([]);
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { session } = useSession();
+  const userId = session?.user.id ?? "";
+  const isAdmin = session?.user.role === "admin";
+  const [recovery] = useState(() => loadPendingCheckout(userId));
+  const [legacyRecovery, setLegacyRecovery] = useState(recovery.legacy);
+  const [pendingCheckout, setPendingCheckout] = useState<PendingCheckout | null>(recovery.pending);
+  const pendingCheckoutRef = useRef<PendingCheckout | null>(recovery.pending);
+  const [storageError, setStorageError] = useState<string | null>(recovery.error);
+  const catalog = useProducts();
+  const [search, setSearch] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [cart, setCart] = useState<CartItem[]>(recovery.pending?.items ?? []);
+  const cartRef = useRef<CartItem[]>(recovery.pending?.items ?? []);
   const [isCheckoutLoading, setIsCheckoutLoading] = useState(false);
+  const [checkoutResult, setCheckoutResult] = useState<CheckoutResult | null>(null);
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const checkoutInFlight = useRef(false);
+  const cartLocked = isCheckoutLoading || pendingCheckout !== null || storageError !== null;
 
-  useEffect(() => {
-    const fetchProducts = async () => {
-      try {
-        const response = await fetch("http://localhost:8080/products");
-        if (response.ok) {
-          const data = await response.json();
-          setProducts(data || []);
-        }
-      } catch (error) {
-        console.error(error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchProducts();
-  }, []);
-
-  const formatPrice = (cents: number) => {
-    return (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const commitCart = (items: CartItem[]) => {
+    if (cartTotal(items) === null) { setCheckoutError("Essa quantidade ultrapassa o limite monetário seguro. O pedido foi mantido sem alterações."); return; }
+    cartRef.current = items;
+    setCart(items);
   };
 
   const addToCart = (product: Product) => {
-    setCart((prevCart) => {
-      const existingItem = prevCart.find((item) => item.id === product.id);
-      if (existingItem) {
-        return prevCart.map((item) => (item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item));
-      }
-      return [...prevCart, { ...product, quantity: 1 }];
-    });
+    if (checkoutInFlight.current || pendingCheckoutRef.current || storageError) return;
+    setCheckoutResult(null);
+    setCheckoutError(null);
+    const previous = cartRef.current;
+    const exists = previous.some(item => item.id === product.id);
+    commitCart(exists ? previous.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item) : [...previous, { ...product, quantity: 1 }]);
   };
 
   const removeFromCart = (productId: string) => {
-    setCart((prevCart) => {
-      const existingItem = prevCart.find((item) => item.id === productId);
-      if (existingItem?.quantity === 1) {
-        return prevCart.filter((item) => item.id !== productId);
-      }
-      return prevCart.map((item) => (item.id === productId ? { ...item, quantity: item.quantity - 1 } : item));
-    });
+    if (checkoutInFlight.current || pendingCheckoutRef.current || storageError) return;
+    setCheckoutError(null);
+    commitCart(cartRef.current.flatMap(item => item.id !== productId ? [item] : item.quantity === 1 ? [] : [{ ...item, quantity: item.quantity - 1 }]));
   };
 
-  const clearCart = () => setCart([]);
+  const discardCart = () => {
+    if (checkoutInFlight.current) return;
+    if (pendingCheckoutRef.current || storageError) {
+      try {
+        if (legacyRecovery) {
+          if (!isAdmin) return;
+          clearLegacyPendingCheckout();
+        } else clearPendingCheckout(userId);
+      } catch {
+        setCheckoutError("Não foi possível limpar o registro local. A tentativa foi mantida.");
+        setConfirmClear(false);
+        return;
+      }
+      pendingCheckoutRef.current = null;
+      setPendingCheckout(null);
+      setStorageError(null);
+      setLegacyRecovery(false);
+    }
+    cartRef.current = [];
+    setCart([]);
+    setCheckoutResult(null);
+    setCheckoutError(null);
+    setConfirmClear(false);
+  };
 
   const handleCheckout = async () => {
+    if (checkoutInFlight.current || storageError || cartRef.current.length === 0) return;
+
+    let attempt = pendingCheckoutRef.current;
+    if (!attempt) {
+      try {
+        attempt = createPendingCheckout(cartRef.current, userId);
+        // Persist before sending: a reload or lost response must reuse this exact sale.
+        savePendingCheckout(attempt);
+      } catch {
+        setCheckoutError("O pedido não foi enviado. Não foi possível salvar a tentativa local; confira o armazenamento do navegador e os valores dos itens.");
+        return;
+      }
+      pendingCheckoutRef.current = attempt;
+      setPendingCheckout(attempt);
+    }
+
+    checkoutInFlight.current = true;
     setIsCheckoutLoading(true);
+    setCheckoutResult(null);
+    setCheckoutError(null);
 
     const orderPayload = {
-      items: cart.map((item) => ({
+      items: attempt.items.map((item) => ({
         product_id: item.id,
         quantity: item.quantity,
       })),
     };
 
     try {
-      const response = await fetch("http://localhost:8080/checkout", {
+      const response = await apiRequest("/checkout", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Idempotency-Key": attempt.key,
         },
         body: JSON.stringify(orderPayload),
       });
 
-      if (response.ok) {
-        alert("Venda registrada com sucesso!");
-        clearCart();
-      } else {
-        alert("Erro ao registrar a venda no servidor.");
+      if (!response.ok) {
+        setCheckoutError(
+          response.status === 409
+            ? "A tentativa conflita com um registro existente. Confira o pedido no servidor antes de iniciar outra venda. Seu carrinho foi mantido."
+            : response.status >= 500
+              ? "O servidor não confirmou o pedido. Use Retomar pedido pendente para reenviar a mesma tentativa. Seu carrinho foi mantido."
+              : "O pedido não foi aceito. Confira os itens e o registro no servidor antes de iniciar outra venda. Seu carrinho foi mantido.",
+        );
+        return;
       }
+
+      const result: unknown = await response.json();
+      if (!isCheckoutResult(result)) {
+        setCheckoutError(
+          "A resposta do servidor não pôde ser confirmada. Use Retomar pedido pendente para recuperar o resultado da mesma tentativa. Seu carrinho foi mantido.",
+        );
+        return;
+      }
+
+      setCheckoutResult(result);
+      try {
+        clearPendingCheckout(userId, attempt.key);
+      } catch {
+        setCheckoutError("Pedido confirmado, mas não foi possível limpar a tentativa local. Retome o pedido pendente para concluir a recuperação antes de iniciar outra venda.");
+        return;
+      }
+      pendingCheckoutRef.current = null;
+      setPendingCheckout(null);
+      cartRef.current = [];
+      setCart([]);
     } catch (error) {
       console.error(error);
-      alert("Erro de conexão com o servidor.");
+      setCheckoutError(
+        "Não foi possível confirmar o pedido. Use Retomar pedido pendente para reenviar com a mesma chave, sem iniciar outra venda. Seu carrinho foi mantido.",
+      );
     } finally {
+      checkoutInFlight.current = false;
       setIsCheckoutLoading(false);
     }
   };
 
-  const cartTotalCents = cart.reduce((total, item) => total + item.price * item.quantity, 0);
+  const total = cartTotal(cart);
+  const filtered = catalog.items.filter(product => searchText(product.name).includes(searchText(search)));
+  const hasPending = pendingCheckout !== null || storageError !== null;
 
-  return (
-    <div style={{ maxWidth: "1200px", margin: "0 auto", display: "flex", gap: "20px" }}>
-      <div
-        style={{
-          flex: "2",
-          backgroundColor: "white",
-          padding: "20px",
-          borderRadius: "8px",
-          boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
-        }}
-      >
-        <h2 style={{ color: "#ff6b6b", borderBottom: "2px solid #f0f2f5", paddingBottom: "10px" }}>
-          Estoque Disponível
-        </h2>
-
-        {loading ? (
-          <p style={{ textAlign: "center", color: "#888", marginTop: "20px" }}>Procurando produtos...</p>
-        ) : products.length === 0 ? (
-          <p style={{ textAlign: "center", color: "#888", marginTop: "20px" }}>Nenhum produto cadastrado.</p>
-        ) : (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-              gap: "15px",
-              marginTop: "20px",
-            }}
-          >
-            {products.map((product) => (
-              <div
-                key={product.id}
-                onClick={() => addToCart(product)}
-                style={{
-                  border: "1px solid #eee",
-                  borderRadius: "8px",
-                  padding: "15px",
-                  cursor: "pointer",
-                  transition: "transform 0.1s, boxShadow 0.1s",
-                  textAlign: "center",
-                  backgroundColor: "#fafafa",
-                }}
-                onMouseOver={(e) => (e.currentTarget.style.borderColor = "#ff6b6b")}
-                onMouseOut={(e) => (e.currentTarget.style.borderColor = "#eee")}
-              >
-                <h3 style={{ margin: "0 0 10px 0", fontSize: "16px", color: "#333" }}>{product.name}</h3>
-                <span style={{ fontWeight: "bold", color: "#2ecc71", fontSize: "18px" }}>
-                  {formatPrice(product.price)}
-                </span>
+  return <>
+    <header className="page-header"><div><span className="eyebrow">OPERAÇÃO DO CAIXA</span><h1>Frente de caixa</h1><p>Escolha os produtos e confira o pedido antes de finalizar.</p></div>
+      <a href="#pedido-atual" className="button button--secondary mobile-cart-link">Ver pedido · {cart.length}</a>
+    </header>
+    <div className="pdv-layout">
+      <section className="panel" aria-labelledby="catalog-title"><div className="panel__heading"><h2 id="catalog-title">Catálogo</h2><span className="badge">{catalog.items.length} produtos</span></div>
+        <div className="catalog-toolbar"><Field label="Buscar produtos" type="search" placeholder="Buscar por nome..." value={search} onChange={event => setSearch(event.target.value)} /></div>
+        {catalog.loading ? <CatalogLoading /> : catalog.error ? <div className="panel-error"><Alert>{catalog.error}</Alert><Button variant="secondary" onClick={catalog.refresh}>Tentar novamente</Button></div> :
+          catalog.items.length === 0 ? <EmptyState title="Nenhum produto cadastrado.">O administrador pode adicionar produtos na gestão do catálogo.</EmptyState> :
+            filtered.length === 0 ? <EmptyState title="Nenhum produto encontrado" action={<Button variant="secondary" onClick={() => setSearch("")}>Limpar busca</Button>}>Tente outro nome para encontrar o produto.</EmptyState> :
+              <div className="catalog-grid">{filtered.map(product => <button type="button" key={product.id} className="product-card" disabled={cartLocked}
+                aria-label={`${product.name}, ${formatPrice(product.price)}. Adicionar ao pedido.`} onClick={() => addToCart(product)}>
+                <span className="product-card__mark" aria-hidden="true">{product.name.trim().split(/\s+/).slice(0, 2).map(word => Array.from(word)[0]).join("").toUpperCase()}</span>
+                <span className="product-card__name">{product.name}</span><span className="product-card__bottom"><span className="product-card__price">{formatPrice(product.price)}</span><span className="product-card__add" aria-hidden="true">＋</span></span>
+              </button>)}</div>}
+      </section>
+      <section id="pedido-atual" className="panel cart-panel" tabIndex={-1} aria-labelledby="cart-title" aria-busy={isCheckoutLoading}>
+        <div className="panel__heading"><h2 id="cart-title">Pedido atual</h2><span className="badge">{hasPending ? "Tentativa pendente" : `${cart.length} produtos`}</span></div>
+        <div className="cart-panel__body">
+          {pendingCheckout && <Alert tone="warning">Existe uma tentativa pendente. Retome este pedido para recuperar o resultado; os itens estão bloqueados para preservar a mesma venda.</Alert>}
+          {storageError && <Alert>{storageError}</Alert>}
+          {checkoutResult && <Alert tone="success">Pedido {checkoutResult.order_id} registrado — aguardando pagamento. Total confirmado: {formatPrice(checkoutResult.total_cents)}.</Alert>}
+          {checkoutError && <Alert>{checkoutError}</Alert>}
+          {cart.length === 0 ? <EmptyState title="O carrinho está vazio.">Selecione um produto do catálogo para começar o atendimento.</EmptyState> :
+            <ul className="cart-list">{cart.map(item => <li key={item.id} className="cart-item"><div>
+              <strong className="cart-item__name">{item.name}</strong><span className="cart-item__unit">{formatPrice(item.price)} x {item.quantity}</span>
+              <div className="quantity" role="group" aria-label={`Quantidade de ${item.name}`}>
+                <Button variant="ghost" disabled={cartLocked} aria-label={`Diminuir quantidade de ${item.name}`} onClick={() => removeFromCart(item.id)}>−</Button>
+                <span aria-live="polite">{item.quantity}</span>
+                <Button variant="ghost" disabled={cartLocked} aria-label={`Aumentar quantidade de ${item.name}`} onClick={() => addToCart(item)}>＋</Button>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div
-        style={{
-          flex: "1",
-          backgroundColor: "white",
-          padding: "20px",
-          borderRadius: "8px",
-          boxShadow: "0 2px 10px rgba(0,0,0,0.05)",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        <h2 style={{ color: "#333", borderBottom: "2px solid #f0f2f5", paddingBottom: "10px" }}>Pedido Atual</h2>
-
-        <div style={{ flexGrow: 1, overflowY: "auto", marginTop: "10px" }}>
-          {cart.length === 0 ? (
-            <p style={{ textAlign: "center", color: "#888", fontStyle: "italic", marginTop: "40px" }}>
-              O carrinho está vazio.
-            </p>
-          ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-              {cart.map((item) => (
-                <li
-                  key={item.id}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "10px 0",
-                    borderBottom: "1px dashed #eee",
-                  }}
-                >
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: "bold", color: "#333" }}>{item.name}</div>
-                    <div style={{ fontSize: "13px", color: "#888" }}>
-                      {formatPrice(item.price)} x {item.quantity}
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    <span style={{ fontWeight: "bold" }}>{formatPrice(item.price * item.quantity)}</span>
-                    <button
-                      onClick={() => removeFromCart(item.id)}
-                      style={{
-                        background: "#e74c3c",
-                        color: "white",
-                        border: "none",
-                        borderRadius: "4px",
-                        width: "25px",
-                        height: "25px",
-                        cursor: "pointer",
-                        fontWeight: "bold",
-                      }}
-                    >
-                      -
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+            </div><span className="cart-item__price">{formatPrice(item.price * item.quantity)}</span></li>)}</ul>}
         </div>
-
-        <div style={{ marginTop: "20px", paddingTop: "20px", borderTop: "2px solid #f0f2f5" }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: "20px",
-              fontWeight: "bold",
-              marginBottom: "20px",
-            }}
-          >
-            <span>Total:</span>
-            <span style={{ color: "#2ecc71" }}>{formatPrice(cartTotalCents)}</span>
-          </div>
-
-          <button
-            onClick={handleCheckout}
-            disabled={cart.length === 0 || isCheckoutLoading}
-            style={{
-              width: "100%",
-              padding: "15px",
-              backgroundColor: cart.length === 0 ? "#ccc" : "#4CAF50",
-              color: "white",
-              border: "none",
-              borderRadius: "6px",
-              fontSize: "18px",
-              fontWeight: "bold",
-              cursor: cart.length === 0 || isCheckoutLoading ? "not-allowed" : "pointer",
-              marginBottom: "10px",
-            }}
-          >
-            {isCheckoutLoading ? "Processando..." : "Finalizar Pedido"}
-          </button>
-
-          <button
-            onClick={clearCart}
-            disabled={cart.length === 0}
-            style={{
-              width: "100%",
-              padding: "10px",
-              backgroundColor: "transparent",
-              color: "#e74c3c",
-              border: "1px solid #e74c3c",
-              borderRadius: "6px",
-              cursor: cart.length === 0 ? "not-allowed" : "pointer",
-            }}
-          >
-            Cancelar Venda
-          </button>
+        <div className="cart-summary"><div className="cart-summary__total"><span>Total</span><strong>{total === null ? "—" : formatPrice(total)}</strong></div>
+          <p className="cart-summary__note">O valor final será confirmado pelo servidor. Registrar o pedido não confirma seu pagamento.</p>
+          <Button className="button--full" disabled={cart.length === 0 || isCheckoutLoading || storageError !== null || total === null} onClick={() => void handleCheckout()}>
+            {isCheckoutLoading ? "Processando..." : pendingCheckout ? "Retomar pedido pendente" : "Finalizar Pedido"}
+          </Button>
+          <Button className="button--full" variant="ghost" disabled={isCheckoutLoading || (legacyRecovery && !isAdmin) || (cart.length === 0 && !hasPending)}
+            onClick={() => { if (!checkoutInFlight.current) setConfirmClear(true); }}>{hasPending ? "Iniciar nova venda" : "Cancelar Venda"}</Button>
         </div>
-      </div>
+      </section>
     </div>
-  );
+    {confirmClear && <Dialog title={hasPending ? "Descartar tentativa pendente?" : "Cancelar venda atual?"} onClose={() => setConfirmClear(false)}>
+      <div className="dialog__body"><p>{hasPending ? "O pedido pode já estar registrado. Descartar a tentativa local não cancela o pedido no servidor. Confira o registro antes de iniciar outra venda." : "Os itens deste carrinho serão removidos. Nenhum pedido foi enviado ao servidor."}</p>
+        <div className="dialog__actions"><Button variant="secondary" autoFocus data-dialog-initial-focus onClick={() => setConfirmClear(false)}>Manter pedido</Button>
+          <Button variant="danger" onClick={discardCart}>{hasPending ? "Descartar tentativa local" : "Cancelar venda"}</Button></div>
+      </div>
+    </Dialog>}
+  </>;
 }

@@ -1,0 +1,516 @@
+openapi: 3.1.0
+info:
+  title: TechSnacks Checkout API
+  version: 0.5.0
+  description: |
+    Contrato de sessões, catálogo, pedidos e probes operacionais do TechSnacks.
+    Registrar um pedido não confirma seu pagamento. O formato de erro existente
+    é preservado. Sessões e permissões são obrigatórias nas rotas de negócio.
+    Cookies devem usar Secure e HTTPS em produção. Não há cadastro público.
+security:
+  - sessionCookie: []
+servers:
+  - url: http://localhost:8080
+    description: Desenvolvimento local
+paths:
+  /health/live:
+    get:
+      operationId: liveness
+      summary: Verificar se o processo responde, sem depender do banco
+      security: []
+      responses:
+        '200':
+          description: Processo ativo
+  /health/ready:
+    get:
+      operationId: readiness
+      summary: Verificar prontidão, incluindo conexão com PostgreSQL
+      security: []
+      responses:
+        '200':
+          description: Pronto para receber tráfego
+        '503':
+          description: Dependência indisponível, sem detalhes internos
+  /sessions:
+    post:
+      operationId: createSession
+      summary: Autenticar operador ou administrador
+      security: []
+      description: |
+        Exige Origin pertencente à allowlist. Define cookie HttpOnly, SameSite=Lax,
+        Path=/ e Secure em produção. Sessão expira em 8 horas e não é renovada
+        implicitamente. Senhas usam Argon2id (64 MiB, 3 iterações, paralelismo 1).
+        Login é limitado por conta (10/15 minutos) e endereço de conexão (100/15 minutos).
+        Usuário inexistente e senha incorreta recebem a mesma resposta.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                  minLength: 3
+                  maxLength: 64
+                password:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                  writeOnly: true
+      responses:
+        '201':
+          description: Sessão criada; cookie enviado por Set-Cookie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          description: Entrada inválida, com details identificando os campos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          description: Limite de tentativas atingido
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Segundos antes de uma nova tentativa
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /sessions/current:
+    get:
+      operationId: getCurrentSession
+      summary: Consultar usuário, expiração e token CSRF da sessão atual
+      responses:
+        '200':
+          description: Sessão válida (Cache-Control no-store)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    delete:
+      operationId: deleteCurrentSession
+      summary: Revogar a sessão e remover seu cookie
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: Sessão revogada
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /products:
+    get:
+      operationId: listProducts
+      summary: Consultar catálogo (operador ou administrador)
+      responses:
+        '200':
+          description: Catálogo
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Product'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    post:
+      operationId: createProduct
+      summary: Cadastrar produto (somente administrador)
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Product'
+      responses:
+        '201':
+          description: Produto cadastrado
+        '400':
+          description: Payload inválido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: ID de produto já existente
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /products/{id}:
+    patch:
+      operationId: updateProduct
+      summary: Editar nome e/ou preço do produto (somente administrador)
+      description: |
+        Atualiza somente os campos enviados, sem alterar o ID. Preços estão em
+        centavos inteiros. Pedidos e respostas idempotentes existentes conservam
+        seus snapshots originais. Campos desconhecidos, null e corpo vazio são rejeitados.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            minLength: 1
+        - $ref: '#/components/parameters/CsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                  description: Não pode conter somente espaços.
+                price:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  maximum: 9007199254740991
+      responses:
+        '200':
+          description: Produto atualizado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '400':
+          description: Entrada inválida, com details identificando os campos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Produto inexistente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    delete:
+      operationId: deleteProduct
+      summary: Excluir produto (somente administrador)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/CsrfToken'
+      responses:
+        '204':
+          description: Produto excluído
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /checkout:
+    post:
+      operationId: checkout
+      summary: Registrar um pedido aguardando pagamento
+      description: |
+        Os preços são obtidos do catálogo pelo servidor. Valores são inteiros em
+        centavos e os cálculos não podem ultrapassar o limite de int64.
+        Quando order_id é omitido ou vazio, o servidor gera um identificador
+        aleatório com prefixo ord-. Um order_id informado é preservado por
+        compatibilidade; isso não é uma garantia de idempotência.
+        Com Idempotency-Key, repetir o mesmo conteúdo retorna a resposta original,
+        inclusive seu preço e status originais, sem criar outro pedido. O estado
+        atual pode ser consultado em GET /orders/{id}. As chaves são específicas
+        deste endpoint, sensíveis a maiúsculas e não expiram automaticamente.
+        Novos pedidos e chaves são vinculados ao usuário autenticado. A mesma
+        chave em outra conta não recupera o pedido de um terceiro. Registros
+        legados sem responsável são consultáveis somente por administradores.
+        A comparação usa os campos reconhecidos do JSON decodificado: espaços e
+        ordem das propriedades não importam; a ordem dos itens importa.
+        Sem chave, o comportamento anterior é mantido, sem garantia de deduplicação.
+        Uma chave não é credencial de autorização.
+      parameters:
+        - $ref: '#/components/parameters/CsrfToken'
+        - in: header
+          name: Idempotency-Key
+          required: false
+          description: Chave opaca por tentativa de venda; não reutilizar para outra venda.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: '^[A-Za-z0-9_-]+$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutInput'
+            example:
+              items:
+                - product_id: product-1
+                  quantity: 2
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '200':
+          description: Pedido registrado ou resposta original recuperada pela chave
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutOutput'
+              example:
+                order_id: ord-JBSWY3DPEHPK3PXPJBSWY3DPEH
+                total_cents: 1300
+                status: AWAITING_PAYMENT
+        '400':
+          description: Corpo inválido ou header Idempotency-Key vazio, repetido ou inválido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+              example:
+                error: invalid request body
+        '409':
+          description: Chave já utilizada com outro conteúdo, ou order_id já existente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+              example:
+                error: idempotency key already used with different content
+        '422':
+          description: |
+            O caso de uso não conseguiu registrar o pedido (por exemplo, carrinho
+            vazio, produto inexistente, quantidade inválida ou overflow monetário).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+              example:
+                error: quantity must be greater than zero
+        '503':
+          description: |
+            Não foi possível consultar ou persistir o registro idempotente.
+            Uma nova tentativa deve usar a mesma chave e o mesmo conteúdo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+              example:
+                error: checkout temporarily unavailable
+  /orders/{id}:
+    get:
+      operationId: getOrder
+      summary: Consultar pedido próprio, ou qualquer pedido como administrador
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '200':
+          description: Pedido recuperado sem executar novamente transições ou notificações
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderReceipt'
+        '404':
+          description: Pedido inexistente
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+        '503':
+          description: Não foi possível recuperar o pedido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegacyError'
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: techsnacks_session
+  parameters:
+    CsrfToken:
+      in: header
+      name: X-CSRF-Token
+      required: true
+      description: Token recebido ao criar ou consultar a sessão; Origin também deve ser permitido.
+      schema:
+        type: string
+  responses:
+    Unauthorized:
+      description: Credenciais inválidas ou sessão ausente, expirada ou revogada
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LegacyError'
+    Forbidden:
+      description: Permissão insuficiente, Origin inválido ou token CSRF inválido
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LegacyError'
+    Unavailable:
+      description: Dependência indisponível, sem detalhes internos na resposta
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LegacyError'
+  schemas:
+    Session:
+      type: object
+      required: [user, csrf_token, expires_at]
+      properties:
+        user:
+          type: object
+          required: [id, username, role]
+          properties:
+            id:
+              type: string
+            username:
+              type: string
+            role:
+              type: string
+              enum: [operator, admin]
+        csrf_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+    Product:
+      type: object
+      required: [id, name, price]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        price:
+          type: integer
+          format: int64
+          minimum: 0
+    CheckoutInput:
+      type: object
+      required: [items]
+      properties:
+        order_id:
+          type: string
+          description: Identificador opcional do cliente, preservado por compatibilidade.
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [product_id, quantity]
+            properties:
+              product_id:
+                type: string
+                minLength: 1
+              quantity:
+                type: integer
+                minimum: 1
+                description: Deve caber no tipo int do servidor e resultar em subtotal válido.
+    CheckoutOutput:
+      type: object
+      required: [order_id, total_cents, status]
+      properties:
+        order_id:
+          type: string
+          minLength: 1
+        total_cents:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9223372036854775807
+        status:
+          type: string
+          const: AWAITING_PAYMENT
+    LegacyError:
+      type: object
+      description: Formato existente, sem catálogo de códigos nesta primeira entrega.
+      required: [error]
+      properties:
+        error:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+    OrderReceipt:
+      type: object
+      required: [order_id, total_cents, status, items]
+      properties:
+        order_id:
+          type: string
+        total_cents:
+          type: integer
+          format: int64
+          minimum: 0
+        status:
+          type: string
+          enum: [OPEN, AWAITING_PAYMENT, COMPLETED]
+        items:
+          type: array
+          items:
+            type: object
+            required: [product_name, quantity, sub_total]
+            properties:
+              product_name:
+                type: string
+              quantity:
+                type: integer
+                minimum: 1
+              sub_total:
+                type: integer
+                format: int64
+                minimum: 0

@@ -1,0 +1,36 @@
+# Standalone production configuration: explicit external PostgreSQL with verified TLS.
+services:
+  backend:
+    image: ${BACKEND_IMAGE:?set an immutable backend image tag or digest}
+    environment:
+      APP_ENV: production
+      APP_ALLOWED_ORIGINS: https://${APP_DOMAIN:?set the HTTPS application hostname}
+      AUTH_TRUSTED_PROXIES: ${AUTH_TRUSTED_PROXIES:-}
+      DB_HOST: ${DB_HOST:?set database host}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:?set database user}
+      DB_NAME: ${DB_NAME:?set database name}
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      DB_SSLMODE: verify-full
+      DB_SSLROOTCERT: /run/secrets/db_ca
+    secrets: [db_password, db_ca]
+    restart: unless-stopped
+    mem_limit: ${BACKEND_MEMORY_LIMIT:-512m}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 20s
+  frontend:
+    image: ${FRONTEND_IMAGE:?set an immutable frontend image tag or digest}
+    ports: ["127.0.0.1:8081:8080"]
+    restart: unless-stopped
+    read_only: true
+    mem_limit: ${FRONTEND_MEMORY_LIMIT:-128m}
+    tmpfs: ["/tmp:rw,nosuid,noexec,size=32m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+secrets:
+  db_password:
+    file: ${DB_PASSWORD_FILE:?set host password-file path}
+  db_ca:
+    file: ${DB_SSLROOTCERT_FILE:?set host database CA-file path}

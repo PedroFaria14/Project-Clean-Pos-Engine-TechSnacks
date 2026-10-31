@@ -1,11 +1,14 @@
 package repository
 
 import (
+	"PedroFaria14/clean-pos-engine/internal/application/port"
 	"PedroFaria14/clean-pos-engine/internal/domain/product"
 	"PedroFaria14/clean-pos-engine/internal/domain/shared"
+	"context"
 	"errors"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type ProductModel struct {
@@ -23,7 +26,6 @@ type GormProductRepository struct {
 }
 
 func NewGormProductRepository(db *gorm.DB) *GormProductRepository {
-	db.AutoMigrate(&ProductModel{})
 	return &GormProductRepository{db: db}
 }
 
@@ -33,7 +35,11 @@ func (r *GormProductRepository) Save(p *product.Product) error {
 		Name:  p.Name(),
 		Price: p.Price().Cents(),
 	}
-	return r.db.Create(&model).Error
+	err := r.db.Create(&model).Error
+	if uniqueViolation(err) {
+		return port.ErrProductConflict
+	}
+	return err
 }
 
 func (r *GormProductRepository) FindByID(id string) (*product.Product, error) {
@@ -41,26 +47,35 @@ func (r *GormProductRepository) FindByID(id string) (*product.Product, error) {
 	err := r.db.Where("id = ?", id).First(&model).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("product not found")
+			return nil, port.ErrProductNotFound
 		}
 		return nil, err
 	}
 
-	price, _ := shared.NewMoney(model.Price)
+	price, err := shared.NewMoney(model.Price)
+	if err != nil {
+		return nil, err
+	}
 	return product.NewProduct(model.ID, model.Name, price)
 }
 
 func (r *GormProductRepository) FindAll() ([]*product.Product, error) {
 	var models []ProductModel
-	err := r.db.Find(&models).Error
+	err := r.db.Order("name ASC, id ASC").Find(&models).Error
 	if err != nil {
 		return nil, err
 	}
 
 	var domainProducts []*product.Product
 	for _, m := range models {
-		price, _ := shared.NewMoney(m.Price)
-		p, _ := product.NewProduct(m.ID, m.Name, price)
+		price, err := shared.NewMoney(m.Price)
+		if err != nil {
+			return nil, err
+		}
+		p, err := product.NewProduct(m.ID, m.Name, price)
+		if err != nil {
+			return nil, err
+		}
 		domainProducts = append(domainProducts, p)
 	}
 	return domainProducts, nil
@@ -68,4 +83,27 @@ func (r *GormProductRepository) FindAll() ([]*product.Product, error) {
 
 func (r *GormProductRepository) Delete(id string) error {
 	return r.db.Where("id = ?", id).Delete(&ProductModel{}).Error
+}
+
+func (r *GormProductRepository) Update(ctx context.Context, id string, name *string, price *int64) (*product.Product, error) {
+	fields := map[string]any{}
+	if name != nil {
+		fields["name"] = *name
+	}
+	if price != nil {
+		fields["price"] = *price
+	}
+	var model ProductModel
+	result := r.db.WithContext(ctx).Model(&model).Clauses(clause.Returning{}).Where("id = ?", id).Updates(fields)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, port.ErrProductNotFound
+	}
+	money, err := shared.NewMoney(model.Price)
+	if err != nil {
+		return nil, err
+	}
+	return product.NewProduct(model.ID, model.Name, money)
 }

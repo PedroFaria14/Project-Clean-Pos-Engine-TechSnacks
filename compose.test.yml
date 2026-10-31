@@ -1,0 +1,50 @@
+# Disposable test stack. Always use its own project name; never attach app volumes.
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test-only-password
+      POSTGRES_DB: techsnacks_test_images
+    ports: ["127.0.0.1:55432:5432"]
+    volumes: ["./deploy/test/init.sql:/docker-entrypoint-initdb.d/01-test-schema.sql:ro"]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d techsnacks_test_images"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  backend:
+    image: techsnacks-backend:test
+    build: {context: ./backend, target: runtime}
+    environment: &test-env
+      APP_ENV: development
+      APP_ALLOWED_ORIGINS: http://127.0.0.1:8088
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: test-only-password
+      DB_NAME: techsnacks_test_images
+      DB_SEARCH_PATH: test_images
+    depends_on:
+      db: {condition: service_healthy}
+    read_only: true
+    mem_limit: 512m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 20s
+  frontend:
+    image: techsnacks-frontend:test
+    build: {context: ./frontend, target: runtime}
+    ports: ["127.0.0.1:8088:8080"]
+    depends_on:
+      backend: {condition: service_healthy}
+    read_only: true
+    mem_limit: 128m
+    tmpfs: ["/tmp:rw,nosuid,noexec,size=32m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  migrate:
+    image: techsnacks-backend:test
+    profiles: [tools]
+    environment: *test-env
+    command: [/usr/local/bin/migrate]

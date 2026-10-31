@@ -1,0 +1,12 @@
+# Run on the deployment host, in front of the loopback-only production frontend.
+{
+    email {$ACME_EMAIL}
+}
+{$APP_DOMAIN} {
+    header Strict-Transport-Security "max-age=31536000"
+    reverse_proxy 127.0.0.1:8081 {
+        health_uri /health/live
+        health_interval 15s
+        health_timeout 3s
+    }
+}

@@ -1,13 +1,15 @@
 package order
 
 import (
+	"fmt"
+	"slices"
+
 	"PedroFaria14/clean-pos-engine/internal/domain/shared"
 )
 
-
-
 type Cart struct {
 	items []CartItem
+	total shared.Money
 }
 
 func NewCart() *Cart {
@@ -16,20 +18,26 @@ func NewCart() *Cart {
 	}
 }
 
-func (c *Cart) AddItem(item CartItem) {
-	c.items = append(c.items, item)
+// AddItem adds a valid item only when the resulting cart total fits in int64.
+func (c *Cart) AddItem(item CartItem) error {
+	validated, err := NewCartItem(item.Product(), item.Quantity())
+	if err != nil {
+		return err
+	}
+	total, err := c.total.Add(validated.SubTotal())
+	if err != nil {
+		return fmt.Errorf("calculate cart total: %w", err)
+	}
+	c.items = append(c.items, *validated)
+	c.total = total
+	return nil
 }
 
+// Items returns a copy so callers cannot invalidate the checked cart total.
 func (c *Cart) Items() []CartItem {
-	return c.items
+	return slices.Clone(c.items)
 }
 
 func (c *Cart) Total() shared.Money {
-	var total int64 = 0
-	for _, item := range c.items {
-		total += item.SubTotal().Cents()
-	}
-
-	money, _ := shared.NewMoney(total)
-	return money
+	return c.total
 }
