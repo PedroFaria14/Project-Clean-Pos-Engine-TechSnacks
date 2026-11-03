@@ -60,3 +60,29 @@ func TestGracefulShutdownDrainsAnActiveRequest(t *testing.T) {
 		t.Fatal("active response was interrupted")
 	}
 }
+
+func TestPlatformPortAndExplicitAddress(t *testing.T) {
+	t.Setenv("PORT", "")
+	t.Setenv("HTTP_ADDR", "")
+	if address, err := server.AddressFromEnv(); err != nil || address != "0.0.0.0:8080" {
+		t.Fatal("default bind address is incorrect")
+	}
+	t.Setenv("PORT", "10000")
+	if address, err := server.AddressFromEnv(); err != nil || address != "0.0.0.0:10000" {
+		t.Fatal("platform PORT was ignored")
+	}
+	if url, err := server.ReadinessURL(); err != nil || url != "http://127.0.0.1:10000/health/ready" {
+		t.Fatal("probe and application ports differ")
+	}
+	t.Setenv("HTTP_ADDR", "127.0.0.1:8123")
+	if address, err := server.AddressFromEnv(); err != nil || address != "127.0.0.1:8123" {
+		t.Fatal("HTTP_ADDR override was lost")
+	}
+	t.Setenv("HTTP_ADDR", "")
+	for _, invalid := range []string{"0", "65536", "-1", "10000;bad", "${PORT}"} {
+		t.Setenv("PORT", invalid)
+		if _, err := server.AddressFromEnv(); err == nil {
+			t.Fatalf("invalid port accepted: %q", invalid)
+		}
+	}
+}

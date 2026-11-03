@@ -47,6 +47,8 @@ Operadores acessam o caixa e os próprios pedidos; administradores também geren
 
 ## Interface e gestão de produtos
 
+A home `/` é pública e apresenta o projeto, tecnologias e escopo atual. O login fica em `/login`, o caixa autenticado em `/caixa` e a gestão administrativa em `/produtos`. Veja [apresentação pública e rotas](backend/docs/public-home.md).
+
 O caixa tem busca de produtos, controles de quantidade e recuperação de tentativas pendentes por conta. Administradores têm cadastro, edição de nome/preço e exclusão com confirmação, com atualização da lista após salvar. A interface usa componentes compartilhados, layouts responsivos e feedback acessível.
 
 Veja [interface operacional, edição de produtos e validação](backend/docs/interface-and-products.md).
@@ -54,5 +56,9 @@ Veja [interface operacional, edição de produtos e validação](backend/docs/in
 ## Infraestrutura e CI
 
 Builds multi-stage, probes, Compose por ambiente, suíte E2E versionada e pipeline estão descritos no [guia de produção e CI](backend/docs/production-and-ci.md). A API exige a migration do catálogo; o CI inclui testes reais, scans, backup/restore sintético e artifacts, sem deploy automático.
+
+Para a configuração dos serviços no Render, veja [deploy Render: API, PostgreSQL e frontend](backend/docs/render.md). O template `render.yaml` prepara somente a API; banco, credenciais, migrations e conta administrativa são configurados explicitamente.
+
+Para Neon, use a URL completa em `Data_Base` ou `DATABASE_URL`. O [guia Neon e `.env`](backend/docs/neon.md) explica o carregamento local, o teste read-only e as variáveis no Render.
 
 

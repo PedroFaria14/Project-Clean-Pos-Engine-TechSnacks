@@ -1,0 +1,24 @@
+# Backend template. PostgreSQL is created/configured separately with its external TLS hostname.
+# Applying a Blueprint provisions resources; this file does not deploy anything by itself.
+services:
+  - type: web
+    name: techsnacks-api
+    runtime: docker
+    plan: free
+    region: ohio
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: APP_ALLOWED_ORIGINS
+        sync: false
+      - key: Data_Base
+        sync: false
+      - key: DB_SSLMODE
+        value: verify-full

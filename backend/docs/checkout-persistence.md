@@ -22,7 +22,7 @@ Após a implantação de autenticação, todas as rotas abaixo exigem sessão v�
 A API verifica a versão do schema ao iniciar. O repositório de pedidos não executa mais `AutoMigrate`.
 O catálogo também usa migration explícita a partir de `000003_product_catalog.up.sql`; seu repositório não executa mais `AutoMigrate`.
 
-Antes de atualizar um banco existente, faça backup e confira o destino definido por `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` e `DB_NAME`.
+Antes de atualizar um banco existente, faça backup e confira o destino definido por `DATABASE_URL`/`Data_Base` ou pelos campos `DB_*`. Não misture as duas formas.
 O comando abaixo aplica as migrations **ao banco configurado nessas variáveis**; ele não é executado automaticamente pela API:
 
 ```powershell

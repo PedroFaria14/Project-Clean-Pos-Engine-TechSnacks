@@ -66,7 +66,13 @@ for (const width of [320, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/');
     await expect(page.getByRole('heading', { level: 1, name: homeTitle })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const layout = await page.evaluate(() => ({
+      width: document.documentElement.scrollWidth,
+      viewport: window.innerWidth,
+      overflow: Array.from(document.querySelectorAll('body *')).filter(element => element.getBoundingClientRect().right > window.innerWidth + 1).map(element => ({ tag: element.tagName, class: element.className, right: element.getBoundingClientRect().right })),
+      contentOverflow: Array.from(document.querySelectorAll('body *')).filter(element => element.scrollWidth > element.clientWidth + 1).map(element => ({ tag: element.tagName, class: element.className, width: element.clientWidth, scrollWidth: element.scrollWidth })),
+    }));
+    expect(layout.width, JSON.stringify({ elements: layout.overflow, content: layout.contentOverflow })).toBeLessThanOrEqual(layout.viewport);
     const header = page.getByRole('banner');
     await expect(header.getByRole('link', { name: 'Entrar no sistema', exact: true })).toBeVisible();
     if (width === 320) {

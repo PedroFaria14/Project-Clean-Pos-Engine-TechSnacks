@@ -56,9 +56,10 @@ try {
   const webPort = await freePort();
   const baseURL = `http://127.0.0.1:${webPort}`;
   const env = { ...process.env, APP_ENV: 'development', APP_ALLOWED_ORIGINS: baseURL,
+    DATABASE_URL: '', Data_Base: '',
     DB_HOST: supplied.hostname.replace(/^\[|\]$/g, ''), DB_PORT: supplied.port || '5432', DB_USER: decodeURIComponent(supplied.username), DB_PASSWORD: decodeURIComponent(supplied.password),
-    DB_PASSWORD_FILE: '', DB_SSLMODE: supplied.searchParams.get('sslmode') || 'disable', DB_NAME: decodeURIComponent(supplied.pathname.slice(1)), DB_SEARCH_PATH: schema, HTTP_ADDR: `127.0.0.1:${apiPort}` };
-  for (const name of ['api', 'migrate', 'create_user']) await run('go', ['build', '-o', join(runtime, binary(name)), `./cmd/${name}`], { cwd: backend });
+    DB_PASSWORD_FILE: '', DB_SSLMODE: supplied.searchParams.get('sslmode') || 'disable', DB_NAME: decodeURIComponent(supplied.pathname.slice(1)), DB_SEARCH_PATH: schema, HTTP_ADDR: '', PORT: String(apiPort) };
+  for (const name of ['api', 'migrate', 'create_user', 'healthcheck']) await run('go', ['build', '-o', join(runtime, binary(name)), `./cmd/${name}`], { cwd: backend });
   await run(join(runtime, binary('migrate')), [], { env });
   const password = randomBytes(20).toString('hex');
   for (const [username, role] of [['e2e.admin', 'admin'], ['e2e.operator', 'operator'], ['e2e.other', 'operator']]) {
@@ -70,6 +71,7 @@ try {
   api.once('error', error => { startupError = error; });
   api.stdout.pipe(logs, { end: false }); api.stderr.pipe(logs, { end: false });
   await waitFor(`http://127.0.0.1:${apiPort}/health/ready`);
+  await run(join(runtime, binary('healthcheck')), [], { env });
   const dist = join(frontend, 'dist');
   const mime = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
   proxy = createHTTPServer(async (req, res) => {

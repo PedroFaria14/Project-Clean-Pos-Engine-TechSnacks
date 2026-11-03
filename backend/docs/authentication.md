@@ -23,7 +23,7 @@ O backend verifica permissões; a restrição de menu no frontend é apenas apre
 
 ## Configuração
 
-As variáveis `DB_*` continuam definindo o banco. A aplicação não carrega arquivos `.env` automaticamente.
+O banco pode ser definido por URL em `DATABASE_URL`/`Data_Base` ou por campos `DB_*`, sem misturar credenciais. No desenvolvimento, os comandos carregam `.env` local quando não há conexão explícita no processo; Render e produção usam as variáveis do ambiente. Consulte [Neon e `.env`](neon.md).
 
 O pool, TLS obrigatório do PostgreSQL em produção, binários dos containers e ferramentas administrativas com credencial separada estão detalhados em [produção e CI](production-and-ci.md).
 

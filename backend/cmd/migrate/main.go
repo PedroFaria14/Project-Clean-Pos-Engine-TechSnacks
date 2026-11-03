@@ -3,10 +3,14 @@ package main
 import (
 	"log"
 
+	"PedroFaria14/clean-pos-engine/internal/infra/config"
 	"PedroFaria14/clean-pos-engine/internal/infra/database"
 )
 
 func main() {
+	if err := config.LoadEnvironment(); err != nil {
+		log.Fatal(err)
+	}
 	db, err := database.Connect()
 	if err != nil {
 		log.Fatal(err)

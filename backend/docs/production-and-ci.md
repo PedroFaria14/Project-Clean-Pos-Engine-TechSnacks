@@ -26,17 +26,18 @@ docker compose up -d --wait backend frontend
 
 Frontend: `http://localhost:5173`. As portas de desenvolvimento estão em loopback. `docker compose down` preserva os dados; não use `down --volumes` na aplicação.
 
-O backend contém binários `api`, `migrate` e `create_user`, não a toolchain Go: comandos antigos `backend go run ...` devem usar esses binários. O frontend Docker tem targets `development` (Vite) e `runtime` (build estático/Nginx).
+O backend contém binários `api`, `migrate`, `create_user` e `healthcheck`, não a toolchain Go: comandos antigos `backend go run ...` devem usar esses binários. O frontend Docker tem targets `development` (Vite) e `runtime` (build estático/Nginx).
 
 A migration `000003_product_catalog.up.sql` preserva o catálogo existente e cria sua tabela em bancos novos. Não existe mais `AutoMigrate` nos repositórios. A API exige explicitamente o schema atualizado antes de iniciar.
 
 ## Servidor e PostgreSQL
 
-Timeouts HTTP: cabeçalhos 5 s, leitura 15 s, escrita 30 s, idle 60 s, cabeçalhos até 1 MiB e encerramento gracioso de 15 s. Containers têm 20 s para terminar. `HTTP_ADDR` altera `:8080`; probes das imagens pressupõem a porta interna padrão.
+Timeouts HTTP: cabeçalhos 5 s, leitura 15 s, escrita 30 s, idle 60 s, cabeçalhos até 1 MiB e encerramento gracioso de 15 s. Containers têm 20 s para terminar. A API usa `HTTP_ADDR` quando definido; caso contrário, `0.0.0.0:$PORT` ou a porta padrão 8080. O probe usa a mesma resolução. O frontend também respeita `PORT` no runtime.
 
 | Variável | Contrato |
 | --- | --- |
-| `DB_HOST`, `DB_USER`, `DB_NAME` | Obrigatórias |
+| `DATABASE_URL` / `Data_Base` | URL completa, alternativas aos campos de credenciais abaixo |
+| `DB_HOST`, `DB_USER`, `DB_NAME` | Obrigatórias somente sem URL |
 | `DB_PORT` | `5432` |
 | `DB_PASSWORD` / `DB_PASSWORD_FILE` | Alternativas mutuamente exclusivas |
 | `DB_SSLMODE` | `disable` no desenvolvimento; somente `verify-full` em produção |
@@ -65,7 +66,7 @@ npm run build
 npm run test:e2e:mock
 ```
 
-Os 34 cenários de navegador estão versionados em `frontend/e2e/mock/`; não dependem mais de arquivos temporários do agente. Usam mocks para falhas, estados de UI e acessibilidade, não para provar conectividade real.
+A suíte de navegador está versionada em `frontend/e2e/mock/`; não depende de arquivos temporários do agente. Usa mocks para falhas, estados de UI e acessibilidade, não para provar conectividade real. Inclui a home pública e as rotas de login/caixa.
 
 Disponibilize um banco local descartável, com nome `techsnacks_test_*`. Exemplo sem volume:
 
@@ -79,7 +80,7 @@ npm run test:e2e
 docker stop techsnacks-e2e-db
 ```
 
-O runner cria um schema próprio aleatório, compila os três comandos Go, aplica migrations nesse schema, cria contas sintéticas com senha aleatória, inicia a API e serve o build estático por um proxy same-origin. Executa Playwright **sem mocks de API**, encerra processos e remove somente o schema criado. Recusa URLs externas e bancos sem prefixo de teste. O usuário de teste precisa poder criar/remover schemas.
+O runner cria um schema próprio aleatório, compila os comandos Go, aplica migrations nesse schema, cria contas sintéticas com senha aleatória, inicia a API e serve o build estático por um proxy same-origin. Executa Playwright **sem mocks de API**, encerra processos e remove somente o schema criado. Recusa URLs externas e bancos sem prefixo de teste. O usuário de teste precisa poder criar/remover schemas.
 
 As jornadas reais verificam cookie HttpOnly, login/logout/revogação, CRUD, reload de rota SPA, CSRF, papéis, acesso a pedido de outro usuário, retomada idempotente e valores históricos. O proxy Node é somente de teste, não substitui o Nginx de produção.
 
@@ -90,7 +91,7 @@ Para Chrome já instalado no Windows, use `PLAYWRIGHT_CHANNEL=chrome`. O CI inst
 `.github/workflows/ci.yml` roda em push, PR e execução manual, com permissões de leitura e sem secrets de produção:
 
 1. Go: formatação, vet, testes unitários/integração PostgreSQL com `-race`, build e `govulncheck`.
-2. Frontend: `npm ci`, unitários, lint, build, audit e os 34 cenários mockados.
+2. Frontend: `npm ci`, unitários, lint, build, audit e a suíte de cenários mockados.
 3. Imagens: build multi-stage, migrations/contas no banco descartável, UID não-root, probes e jornadas reais através do **Nginx das imagens**, não do proxy Node.
 4. Trivy bloqueia HIGH/CRITICAL. Gera SBOMs CycloneDX e disponibiliza imagens aprovadas, etiquetadas pelo SHA do commit, como artifacts por 7 dias. Não publica em registry ou faz deploy.
 5. Backup/restore usa `pg_dump`/`pg_restore` da própria imagem PostgreSQL 15, outro banco descartável e uma linha de verificação.
@@ -119,9 +120,9 @@ docker compose --env-file deploy/.env.production -f compose.production.tools.yml
 docker compose --env-file deploy/.env.production -f compose.production.yml up -d --wait
 ```
 
-Instale/opere Caddy no host com `APP_DOMAIN` e `ACME_EMAIL`, valide `deploy/Caddyfile` com `caddy validate` e configure DNS/portas 80/443. Caddy gerencia HTTPS, consulta readiness e encaminha para `127.0.0.1:8081`. O backend não tem porta publicada.
+Instale/opere Caddy no host com `APP_DOMAIN` e `ACME_EMAIL`, valide `deploy/Caddyfile` com `caddy validate` e configure DNS/portas 80/443. Caddy gerencia HTTPS, verifica o frontend e encaminha para `127.0.0.1:8081`. O backend não tem porta publicada. A apresentação pública continua acessível quando a API falha; monitore a readiness do backend separadamente.
 
-Go usa UID 10001 e Nginx UID 101; root filesystem readonly, capabilities removidas e sem ganho de privilégio. Nginx usa tmpfs limitado, CSP/nosniff/anti-frame, cache de assets e fallback SPA; DNS Docker acompanha recriações do backend. Memória padrão: Go 512 MiB e Nginx 128 MiB, ajustáveis após medição.
+Go usa UID 10001 e Nginx UID 101; root filesystem readonly, capabilities removidas e sem ganho de privilégio. O entrypoint gera configuração Nginx no tmpfs, usando o DNS do ambiente, CSP/nosniff/anti-frame, cache de assets e fallback SPA. `API_PROXY_TARGET` permite Compose (`http://backend:8080`) ou upstream HTTPS no Render, com Host/SNI corretos e certificado verificado. Memória padrão: Go 512 MiB e Nginx 128 MiB, ajustáveis após medição.
 
 ## Operação, backup e rollback
 

@@ -130,7 +130,6 @@
   .home-preview__order p { flex-wrap: wrap; gap: 2px; }
   .home-preview__status { font-size: .55rem; }
   .home-section { padding-block: 46px; }
-  .home-section h2 br { display: none; }
   .home-flow ol { flex-direction: column; gap: 14px; }
   .home-architecture { padding: 24px; }
   .home-evolution__details { padding-left: 20px; }

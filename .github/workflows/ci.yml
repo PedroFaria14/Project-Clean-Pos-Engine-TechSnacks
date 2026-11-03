@@ -94,6 +94,11 @@ jobs:
       - name: Build runtime images and initialize only the disposable test database
         run: |
           docker compose -p techsnacks-ci -f compose.test.yml build --build-arg VCS_REF="$GITHUB_SHA" backend frontend
+          docker run --rm -e PORT=10000 -e API_PROXY_TARGET=https://api.example.invalid techsnacks-frontend:test nginx -t -c /tmp/techsnacks-nginx.conf
+          if docker run --rm -e PORT=10000 -e API_PROXY_TARGET=https://api.example.invalid/invalid techsnacks-frontend:test nginx -t; then
+            echo "Invalid proxy configuration was accepted" >&2
+            exit 1
+          fi
           docker compose -p techsnacks-ci -f compose.test.yml up -d --wait db
           docker compose -p techsnacks-ci -f compose.test.yml --profile tools run --rm migrate
           for account in e2e.admin e2e.operator e2e.other; do

@@ -19,9 +19,11 @@ import (
 )
 
 type Config struct {
-	Host, Port, User, Password, Name, SSLMode, SSLRootCert, SearchPath string
-	MaxOpen, MaxIdle                                                   int
-	StatementTimeout                                                   time.Duration
+	Host, Port, User, Name, SSLMode, SSLRootCert, SearchPath string
+	Password                                                 string `json:"-"`
+	MaxOpen, MaxIdle                                         int
+	StatementTimeout                                         time.Duration
+	parameters                                               url.Values
 }
 
 // LoadConfig validates runtime settings without exposing credentials in errors.
@@ -32,8 +34,66 @@ func LoadConfig() (Config, error) {
 	if env := os.Getenv("APP_ENV"); env != "" && env != "development" && env != "production" {
 		return c, errors.New("invalid APP_ENV")
 	}
+	connectionURL, alias := os.Getenv("DATABASE_URL"), os.Getenv("Data_Base")
+	if connectionURL != "" && alias != "" && connectionURL != alias {
+		return c, errors.New("DATABASE_URL and Data_Base contain conflicting configuration; use only one")
+	}
+	if connectionURL == "" {
+		connectionURL = alias
+	}
+	if connectionURL != "" {
+		for _, key := range []string{"DB_HOST", "DB_PORT", "DB_USER", "DB_NAME", "DB_PASSWORD", "DB_PASSWORD_FILE"} {
+			if os.Getenv(key) != "" {
+				return c, errors.New("configure a database URL or separate DB_* credentials, not both")
+			}
+		}
+		u, err := url.Parse(connectionURL)
+		if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Hostname() == "" || u.User == nil || u.Fragment != "" {
+			return c, errors.New("invalid database URL; expected a complete postgres or postgresql URL")
+		}
+		parameters, err := url.ParseQuery(u.RawQuery)
+		if err != nil {
+			return c, errors.New("invalid database URL parameters")
+		}
+		for _, key := range []string{"host", "hostaddr", "port", "user", "password", "dbname", "database"} {
+			if parameters.Has(key) {
+				return c, errors.New("database URL must not override identity through query parameters")
+			}
+		}
+		for _, values := range parameters {
+			if len(values) != 1 {
+				return c, errors.New("database URL contains repeated parameters")
+			}
+		}
+		c.Host, c.Port, c.User, c.Name = u.Hostname(), u.Port(), u.User.Username(), strings.TrimPrefix(u.Path, "/")
+		c.Password, _ = u.User.Password()
+		c.parameters = parameters
+		if c.SSLMode == "" {
+			mode := parameters.Get("sslmode")
+			switch mode {
+			case "", "disable", "prefer", "require", "verify-ca", "verify-full":
+			default:
+				return c, errors.New("invalid database URL TLS mode")
+			}
+			if production {
+				if mode == "disable" {
+					return c, errors.New("production database URLs must not disable TLS")
+				}
+				// Provider URLs commonly use require. Strengthen verification, never weaken it.
+				c.SSLMode = "verify-full"
+			} else {
+				c.SSLMode = mode
+			}
+		}
+		if c.SSLRootCert == "" {
+			c.SSLRootCert = parameters.Get("sslrootcert")
+		}
+		if c.SearchPath == "" {
+			c.SearchPath = parameters.Get("search_path")
+		}
+	}
 	if c.Host == "" || c.User == "" || c.Name == "" {
-		return c, errors.New("DB_HOST, DB_USER and DB_NAME are required")
+		return c, errors.New("configure DATABASE_URL, Data_Base or the required DB_HOST, DB_USER and DB_NAME fields")
 	}
 	if c.Port == "" {
 		c.Port = "5432"
@@ -42,7 +102,9 @@ func LoadConfig() (Config, error) {
 	if err != nil || port < 1 || port > 65535 {
 		return c, errors.New("invalid DB_PORT")
 	}
-	c.Password = os.Getenv("DB_PASSWORD")
+	if connectionURL == "" {
+		c.Password = os.Getenv("DB_PASSWORD")
+	}
 	if file := os.Getenv("DB_PASSWORD_FILE"); file != "" {
 		if c.Password != "" {
 			return c, errors.New("configure only one of DB_PASSWORD and DB_PASSWORD_FILE")
@@ -94,7 +156,10 @@ func LoadConfig() (Config, error) {
 
 func (c Config) dsn() string {
 	u := url.URL{Scheme: "postgres", Host: net.JoinHostPort(c.Host, c.Port), User: url.UserPassword(c.User, c.Password), Path: "/" + c.Name}
-	query := u.Query()
+	query := make(url.Values, len(c.parameters))
+	for key, values := range c.parameters {
+		query[key] = append([]string(nil), values...)
+	}
 	query.Set("sslmode", c.SSLMode)
 	query.Set("connect_timeout", "5")
 	query.Set("statement_timeout", strconv.FormatInt(c.StatementTimeout.Milliseconds(), 10))

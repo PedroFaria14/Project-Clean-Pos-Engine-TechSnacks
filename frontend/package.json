@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test": "node --experimental-strip-types --test tests/pendingCheckout.test.ts tests/products.test.ts tests/routes.test.ts",
+    "test": "node --experimental-strip-types --test tests/pendingCheckout.test.ts tests/products.test.ts tests/routes.test.ts tests/proxy_configuration.test.ts",
     "test:checkout": "node --experimental-strip-types --test tests/pendingCheckout.test.ts",
     "test:e2e:mock": "playwright test --config=playwright.mock.config.ts",
     "test:e2e": "npm run build && node scripts/run_e2e.mjs",

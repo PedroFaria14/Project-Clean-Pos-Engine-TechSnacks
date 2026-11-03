@@ -2,6 +2,7 @@ package main
 
 import (
 	"PedroFaria14/clean-pos-engine/internal/application/usecase"
+	"PedroFaria14/clean-pos-engine/internal/infra/config"
 	"PedroFaria14/clean-pos-engine/internal/infra/database"
 	"PedroFaria14/clean-pos-engine/internal/infra/delivery/api"
 	"PedroFaria14/clean-pos-engine/internal/infra/repository"
@@ -28,6 +29,9 @@ func main() {
 }
 
 func run() error {
+	if err := config.LoadEnvironment(); err != nil {
+		return err
+	}
 	config, err := api.AuthConfigFromEnv()
 	if err != nil {
 		return err
@@ -68,9 +72,9 @@ func run() error {
 		return err
 	}
 	api.RegisterHealth(r, pool.PingContext)
-	address := os.Getenv("HTTP_ADDR")
-	if address == "" {
-		address = ":8080"
+	address, err := server.AddressFromEnv()
+	if err != nil {
+		return err
 	}
 	listener, err := net.Listen("tcp", address)
 	if err != nil {

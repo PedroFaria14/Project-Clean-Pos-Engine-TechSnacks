@@ -8,12 +8,16 @@ import (
 	"os"
 
 	"PedroFaria14/clean-pos-engine/internal/domain/identity"
+	"PedroFaria14/clean-pos-engine/internal/infra/config"
 	"PedroFaria14/clean-pos-engine/internal/infra/database"
 	"PedroFaria14/clean-pos-engine/internal/infra/repository"
 	"PedroFaria14/clean-pos-engine/internal/infra/security"
 )
 
 func main() {
+	if err := config.LoadEnvironment(); err != nil {
+		log.Fatal(err)
+	}
 	username := flag.String("username", "", "Account name (3 to 64 ASCII characters)")
 	role := flag.String("role", "operator", "operator or admin")
 	flag.Parse()

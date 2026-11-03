@@ -6,8 +6,61 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 )
+
+// AddressFromEnv supports platform-provided PORT while preserving HTTP_ADDR overrides.
+func AddressFromEnv() (string, error) {
+	if address := os.Getenv("HTTP_ADDR"); address != "" {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil || !validPort(port) {
+			return "", errors.New("invalid HTTP_ADDR")
+		}
+		if host == "" {
+			host = "0.0.0.0"
+		}
+		return net.JoinHostPort(host, port), nil
+	}
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	if !validPort(port) {
+		return "", errors.New("invalid PORT")
+	}
+	return net.JoinHostPort("0.0.0.0", port), nil
+}
+
+func validPort(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, c := range value {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	port, err := strconv.Atoi(value)
+	return err == nil && port >= 1 && port <= 65535
+}
+
+// ReadinessURL uses the same port resolution as the application, including Render PORT.
+func ReadinessURL() (string, error) {
+	address, err := AddressFromEnv()
+	if err != nil {
+		return "", err
+	}
+	host, port, _ := net.SplitHostPort(address)
+	if host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	if host == "::" {
+		host = "::1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/health/ready", nil
+}
 
 // New configures finite HTTP timeouts; TLS terminates at the deployment proxy.
 func New(address string, handler http.Handler) *http.Server {
