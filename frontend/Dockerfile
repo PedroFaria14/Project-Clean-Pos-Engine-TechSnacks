@@ -14,7 +14,7 @@ FROM dependencies AS build
 COPY . .
 RUN npm run build
 
-FROM nginxinc/nginx-unprivileged:1.30-alpine AS runtime
+FROM nginxinc/nginx-unprivileged:1.31-alpine AS runtime
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.revision=$VCS_REF
 USER root
