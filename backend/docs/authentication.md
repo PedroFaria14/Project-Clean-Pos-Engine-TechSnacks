@@ -1,23 +1,23 @@
 # Autenticação e permissões
 
-## Contrato
+## Contratos
 
 Consulte `api/openapi.yaml`. As rotas de negócio agora exigem uma sessão válida.
 
-| Endpoint | Comportamento |
-| --- | --- |
-| `POST /sessions` | Login; retorna `201`, atributos públicos, expiração e token CSRF; define cookie de sessão |
-| `GET /sessions/current` | Consulta a sessão válida e recupera o token CSRF |
-| `DELETE /sessions/current` | Revoga a sessão atual e remove o cookie (`204`) |
+| Endpoint                   | Comportamento                                                                             |
+| -------------------------- | ----------------------------------------------------------------------------------------- |
+| `POST /sessions`           | Login; retorna `201`, atributos públicos, expiração e token CSRF; define cookie de sessão |
+| `GET /sessions/current`    | Consulta a sessão válida e recupera o token CSRF                                          |
+| `DELETE /sessions/current` | Revoga a sessão atual e remove o cookie (`204`)                                           |
 
 Não há cadastro público ou usuário/senha padrão. Uma falha de login não informa se a conta existe.
 
-| Operação | Operador | Administrador |
-| --- | --- | --- |
-| Consultar catálogo e registrar venda | Sim | Sim |
-| Consultar pedido próprio | Sim | Sim |
-| Consultar pedido de outra conta ou pedido legado sem responsável | Não (`404`) | Sim |
-| Cadastrar/excluir produtos | Não (`403`) | Sim |
+| Operação                                                         | Operador    | Administrador |
+| ---------------------------------------------------------------- | ----------- | ------------- |
+| Consultar catálogo e registrar venda                             | Sim         | Sim           |
+| Consultar pedido próprio                                         | Sim         | Sim           |
+| Consultar pedido de outra conta ou pedido legado sem responsável | Não (`404`) | Sim           |
+| Cadastrar/excluir produtos                                       | Não (`403`) | Sim           |
 
 O backend verifica permissões; a restrição de menu no frontend é apenas apresentação. Papel e usuário enviados pelo cliente não concedem privilégios.
 
@@ -27,12 +27,12 @@ O banco pode ser definido por URL em `DATABASE_URL`/`Data_Base` ou por campos `D
 
 O pool, TLS obrigatório do PostgreSQL em produção, binários dos containers e ferramentas administrativas com credencial separada estão detalhados em [produção e CI](production-and-ci.md).
 
-| Variável | Uso |
-| --- | --- |
-| `APP_ENV` | `development` (padrão local) ou `production` |
-| `APP_ALLOWED_ORIGINS` | Origens completas, sem barra final, separadas por vírgula; obrigatória em produção |
-| `AUTH_TRUSTED_PROXIES` | IPs/CIDRs dos proxies realmente controlados, separados por vírgula; nenhum é confiável por padrão |
-| `API_PROXY_TARGET` | Variável **do servidor Vite**, não do bundle; padrão local `http://127.0.0.1:8080`, Compose `http://backend:8080` |
+| Variável               | Uso                                                                                                               |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `APP_ENV`              | `development` (padrão local) ou `production`                                                                      |
+| `APP_ALLOWED_ORIGINS`  | Origens completas, sem barra final, separadas por vírgula; obrigatória em produção                                |
+| `AUTH_TRUSTED_PROXIES` | IPs/CIDRs dos proxies realmente controlados, separados por vírgula; nenhum é confiável por padrão                 |
+| `API_PROXY_TARGET`     | Variável **do servidor Vite**, não do bundle; padrão local `http://127.0.0.1:8080`, Compose `http://backend:8080` |
 
 Em desenvolvimento, as origens padrão são `http://localhost:5173` e `http://127.0.0.1:5173`. O Compose é um ambiente de desenvolvimento, não um manifesto de produção.
 
