@@ -119,26 +119,26 @@ jobs:
           npx --no-install playwright install --with-deps chromium
           npm run test:e2e:external
       - name: Scan backend runtime image
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: techsnacks-backend:test
           severity: HIGH,CRITICAL
           exit-code: '1'
       - name: Scan frontend runtime image
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: techsnacks-frontend:test
           severity: HIGH,CRITICAL
           exit-code: '1'
       - run: mkdir -p .artifacts
       - name: Backend SBOM
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: techsnacks-backend:test
           format: cyclonedx
           output: .artifacts/backend-sbom.cdx.json
       - name: Frontend SBOM
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: techsnacks-frontend:test
           format: cyclonedx
